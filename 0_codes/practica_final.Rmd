@@ -1,0 +1,126 @@
+---
+title: "Modelos para Datos de Panel o Longitudinales"
+author: "Cesar Jimenez y Nestor Viñals"
+header-includes:
+- \usepackage{pdflscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, include = FALSE)
+rm(list = ls()) # Limpiar el Global Environment
+library(plm) # Para análisis de datos de panel
+library(stargazer) # Mostrar las tablas en formato bonito
+library(dplyr) # Para realizar las transformaciones de la data
+```
+
+## Introduccion
+
+En este proyecto se estima un modelo de la demanda de cigarrillos usando datos de panel con información de 46 estados de los Estados Unidos de America, abarcando el periodo 1963-92. Este modelo dinámico de demanda parte de, y expande, el trabajo realizado por Baltagi y Levin (1992) y cuyo objetivo principal era mostrar las trampas de depender modelos de series temporales para un estado dado o, alternativamente, estudios de corte transversal para periodo (para mas información sobre el análisis original, ver Baltagi y Levin, 1992).
+
+El análisis original expande un trabajo anterior y lo expande para incluir, en total, el periodo 1963-88. En este trabajo, lo ampliamos para abarcar el periodo 1963-92.
+
+## Importando y transformando la base de datos
+
+### Descripcion
+
+La base de datos utilizada en este análisis es el dataframe `Cigar` de la librería `plm`. Esta contiene información acerca del consumo de cigarrillos y ingreso disponible per capita para 46 estados de los Estados Unidos comprendiendo el periodo 1963-92 (para ver todas la variables de la base de datos, ver la viñeta de Cigar usando `?plm::Cigar`).
+
+Para la estimación de los modelos, se realizaron las siguientes transformaciones:
+
+```{r importando-data, include = TRUE, message = FALSE}
+data(Cigar) # Importada de la librería `plm`
+Cigar <- Cigar %>%
+      mutate(sales_lag1 = lag(sales, 1), lnC = log(sales), lnPm = log(pimin),
+             lnC_lag1 = log(sales_lag1), lnP = log(price), lnY = log(ndi)) %>%
+      select(state, year, lnC, lnC_lag1, lnP, lnY, lnPm) %>%
+      tibble()
+datos_panel <- pdata.frame(Cigar, index = c("state", "year"))
+```
+
+## Modelo y resultados
+
+El modelo a estimar es el siguiente:
+
+$$lnC_{i,t}=\beta_0+\beta_1 lnC_{i,t-1}+\beta_2 lnP_{i,t}+\beta_3 lnY_{i,t} + \beta_4 lnPn_{i,t} + \epsilon_{i,t}$$
+
+Donde el subindice *i* denota el *i*vo estado y el subindice *t* indica el *t*vo periodo. $C_{i,t}$ representa las ventas de cigarrillos en paquetes per capita (considerando solo a las personas mayores de 14 años). $P_{i,t}$ es el precio promedio de venta  en términos reales. $Pn_{i,t}$ es el precio de venta mínimo por paquete de cigarrillos en los estados contiguos. $Y_{i,t}$ representa el ingreso disponible per capita en términos reales. 
+
+```{r corriendo_modelos}
+# Estimador de Pooled OLS
+mod_pooled <- plm(lnC ~ lnC_lag1 + lnP + lnY + lnPm, data = datos_panel, 
+                  model = "pooling")
+# Estimador de Between
+mod_between <- plm(lnC ~ lnC_lag1 + lnP + lnY + lnPm, data = datos_panel, 
+                   model = "between")
+# Estimador de Primeras Diferencias
+mod_fd <- plm(lnC ~ lnC_lag1 + lnP + lnY + lnPm, data = datos_panel, 
+              model = "fd")
+# Estimador de Efectos Fijos
+mod_fe <- plm(lnC ~ lnC_lag1 + lnP + lnY + lnPm, data = datos_panel, 
+              model = "within")
+# Estimador de Efectos Aleatorios
+mod_re <- plm(lnC ~ lnC_lag1 + lnP + lnY + lnPm, data = datos_panel, 
+              model = "random")
+models <- c("Pooled", "Between", 
+            "First Differences", "Within", "Random Effects")
+betas <- sapply(list(mod_pooled, mod_between, mod_fd, mod_fe, mod_re),
+               coef) %>%
+  sapply(`[`, "lnC_lag1")
+names(betas) <- models
+```
+
+\newpage
+\blandscape
+
+En la siguiente tabla se muestran los distintos modelos a comparar: Pooling (OLS), Between, First Differences (primeras diferencias), Within y Random Effects (efectos aleatorios):
+```{r modelos, results = 'asis', include = TRUE, echo = FALSE}
+stargazer(mod_pooled, mod_between, mod_fd, mod_fe, mod_re,
+          type = "latex", header = FALSE, 
+          column.labels = models)
+```
+
+Las elasticidades estimadas de largo plazo pueden ser obtenidas a partir de las de corto plazo multiplicando este por $1/(1-\hat{\beta_1})$, donde $\hat{\beta_1}$ es el estimador del consumo rezagado. Así, los estimadores de largo plazo para los modelos *Pooling*, *Between*, *First Differences*, *Within* y *Random Effects* son `r round(1/(1-betas[1:4]), 3)` y `r round(1/(1-betas[4]), 3)`, respectivamente.
+
+\elandscape
+
+\newpage
+
+## Diagnostico
+
+Iniciamos el diagnostico aplicando la prueba de los multiplicadores de Langrange del modelo *pooled*. Aquí estamos contrastando el modelo de *random effects* (efectos aleatorios) con el modelo *pooled*. A partir de este, rechazamos la hipótesis nula de que el modelo correcto es el *pooled*.
+
+```{r, include = TRUE, echo = FALSE}
+plmtest(mod_pooled)
+```
+
+Luego prodecemos a ejecutar la prueba F de contraste de *fixed effects* (efectos fijos) versus modelo *pooled*.  Aquí, de nuevo, rechazamos la hipótesis nula de que el modelo *pooled* es el correcto (los efectos individuales son significativos) y concluimos que debemos utilizar un modelos de efectos fijos.
+
+```{r, include = TRUE, echo = FALSE}
+# El modelo apropiedo es el de efecto fijo
+# Lagrange Multiplier Test
+
+# F Test
+# Contraste de efectos fijos versus MCO
+pFtest(mod_fe, mod_pooled)
+```
+
+Finalmente, Luego procedemos a ejecutar la prueba Hausman de contraste de *fixed effects* (efectos fijos) versus *random effects* (efectos aleatorios), para descartar . A partir de este, rechazamos la hipótesis nula de que ambos modelos son iguales y concluimos que existe endogeneidad y el modelo correcto es a utilizar es el de *fixed effects*.
+
+```{r, include = TRUE, echo = FALSE}
+# Pruebas de hipotesis: verificar que 0.045 (mod_pooled) != 0.039 (mod_between)
+# Educacion se pierde para los modelos de primeras diferencias y de efectos fijos
+#     porque no tiene variacion en el tiempo (diff = 0)
+# Hausman test
+phtest(mod_re, mod_fe)
+```
+## Conclusion
+
+A partir del modelo seleccionado, el de efectos fijos (*within*), podemos interpretar lo siguiente, usando los estimadores obtenidos:
+
+- La persistencia del consumo de cigarrillos se aprecia en el coeficiente, donde un aumento de un 1% en el consumo de cigarrillos en el periodo anterior se traduce en un aumento de 0.495% en el periodo evaluado.
+- Un aumento de un 1% en el precio del paquete de cigarrillos esta asociado a una disminución de 0.55% en el consumo de estos.
+- Contrariamente, un aumento de un 1% en el ingreso percibido se correlaciona con un aumento de un 0.25% en el consumo de cigarrillos.
+- A su vez, un aumento en el precio minimo de un paquete de cigarrillos en los estando colindantes, se traduce en un aumento en el consumo de cigarrillos en el estado evaluado.
